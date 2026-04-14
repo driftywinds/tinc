@@ -64,7 +64,7 @@ public class Main {
 
     // Load Freemarker templates from the classpath so the fat jar is
     // self-contained — no filesystem template directory required at runtime.
-    Configuration config = new Configuration(Configuration.VERSION_2_3_33);
+    Configuration config = new Configuration();
     config.setClassForTemplateLoading(Main.class, "/spark/template/freemarker");
     FreeMarkerEngine freeMarker = new FreeMarkerEngine(config);
 
