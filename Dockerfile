@@ -25,4 +25,4 @@ EXPOSE 4567
 # container always listens on 4567 regardless of host mapping.
 ENV PORT=4567
 
-CMD ["java", "-jar", "app.jar"]
+CMD ["java", "-Dorg.eclipse.jetty.http.HttpCompliance=RFC2616", "-jar", "app.jar"]
