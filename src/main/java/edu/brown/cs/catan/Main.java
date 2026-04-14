@@ -1,7 +1,5 @@
 package edu.brown.cs.catan;
 
-import java.io.File;
-import java.io.IOException;
 import java.util.Map;
 
 import com.google.common.collect.ImmutableMap;
@@ -20,15 +18,11 @@ import spark.template.freemarker.FreeMarkerEngine;
 
 public class Main {
 
-  private static final int    NUM_THREADS      = 8;
-  private static final int    MIN_THREADS      = 2;
-  private static final int    TIMEOUT          = 3600000;
+  private static final int NUM_THREADS = 8;
+  private static final int MIN_THREADS = 2;
+  private static final int TIMEOUT     = 3_600_000;
 
-  private static final String STATIC_FILE_PATH =
-      System.getenv("HEROKU") != null ? "target/classes/static"
-          : "src/main/resources/static";
-
-  private GCT                 gct;
+  private GCT gct;
 
 
   public static void main(String[] args) {
@@ -37,37 +31,51 @@ public class Main {
 
 
   private Main() {
-    Spark.externalStaticFileLocation(STATIC_FILE_PATH);
+    // Serve static assets from the classpath (/src/main/resources/static →
+    // packed into the fat jar at /static/).  No filesystem path needed.
+    Spark.staticFileLocation("/static");
+
     Spark.port(getHerokuAssignedPort());
     Spark.threadPool(NUM_THREADS, MIN_THREADS, TIMEOUT);
-    // secure("", "", "", ""); // use this for https!
+
+    // ── Reverse-proxy support ──────────────────────────────────────────────
+    // When running behind nginx / Caddy / Traefik the real client IP and
+    // scheme arrive in these standard headers.  Rewrite the request so that
+    // Spark's req.ip() / req.scheme() return the correct values downstream.
+    Spark.before((req, res) -> {
+      String forwardedFor = req.headers("X-Forwarded-For");
+      if (forwardedFor != null && !forwardedFor.isEmpty()) {
+        // X-Forwarded-For may be a comma-separated list; the first entry is
+        // the original client.
+        req.attribute("client-ip", forwardedFor.split(",")[0].trim());
+      }
+
+      String proto = req.headers("X-Forwarded-Proto");
+      if (proto != null && !proto.isEmpty()) {
+        // Force any absolute redirects to use the correct scheme.
+        req.attribute("spark.requestedScheme", proto.trim());
+      }
+    });
+
     gct = new GCTBuilder("/action")
         .withGroupSelector(new CatanGroupSelector())
         .withGroupViewRoute("/groups")
         .build();
 
-    Configuration config = new Configuration();
-    File templates = new File(
-        "src/main/resources/spark/template/freemarker");
-    try {
-      config.setDirectoryForTemplateLoading(templates);
-    } catch (IOException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
-    }
+    // Load Freemarker templates from the classpath so the fat jar is
+    // self-contained — no filesystem template directory required at runtime.
+    Configuration config = new Configuration(Configuration.VERSION_2_3_33);
+    config.setClassForTemplateLoading(Main.class, "/spark/template/freemarker");
     FreeMarkerEngine freeMarker = new FreeMarkerEngine(config);
 
-    // Set up board
     Spark.get("/board", new BoardHandler(), freeMarker);
-    Spark.get("/home", new HomeHandler(), freeMarker);
+    Spark.get("/home",  new HomeHandler(),  freeMarker);
     Spark.get("/stats", new StatsHandler(), freeMarker);
     Spark.before("/", (request, response) -> {
       System.out.println(
           "Redirect causes an extra open/close on GroupView. Disregard.");
       response.redirect("/home");
     });
-
-    // secure("", "", "", ""); // use this for https!
 
     Spark.init();
   }
@@ -76,14 +84,10 @@ public class Main {
   private void run() {}
 
 
-  // used for heroku hosting - environment variables are set by heroku.
+  /** Reads PORT env var so the image works with any host port mapping. */
   private static int getHerokuAssignedPort() {
-    ProcessBuilder processBuilder = new ProcessBuilder();
-    if (processBuilder.environment().get("PORT") != null) {
-      return Integer.parseInt(processBuilder.environment().get("PORT"));
-    }
-    return 4567; // return default port if heroku-port isn't set (i.e. on
-    // localhost)
+    String port = System.getenv("PORT");
+    return port != null ? Integer.parseInt(port) : 4567;
   }
 
 
@@ -93,29 +97,26 @@ public class Main {
     public ModelAndView handle(Request req, Response res) {
       Map<String, Object> variables =
           new ImmutableMap.Builder<String, Object>()
-              .put("title", "Catan Stats")
-              .put("openGroups", gct.openGroups().toString())
+              .put("title",        "Catan Stats")
+              .put("openGroups",   gct.openGroups().toString())
               .put("closedGroups", gct.closedGroups().toString())
-              .put("limit", gct.groupLimit())
+              .put("limit",        gct.groupLimit())
               .build();
       return new ModelAndView(variables, "stats.ftl");
     }
-
   }
+
 
   private static class BoardHandler implements TemplateViewRoute {
 
     @Override
     public ModelAndView handle(Request req, Response res) {
-      Map<String, Object> variables = ImmutableMap.of("title",
-          "Play Catan");
+      Map<String, Object> variables = ImmutableMap.of("title", "Play Catan");
       return new ModelAndView(variables, "board.ftl");
     }
   }
 
-  /**
-   * A class which controls the initial page for maps.
-   */
+
   private class HomeHandler implements TemplateViewRoute {
 
     @Override
@@ -131,8 +132,8 @@ public class Main {
         }
       }
 
-      Map<String, Object> variables = ImmutableMap.of("title",
-          "Catan : Home");
+      Map<String, Object> variables =
+          ImmutableMap.of("title", "Catan : Home");
       return new ModelAndView(variables, "home.ftl");
     }
   }

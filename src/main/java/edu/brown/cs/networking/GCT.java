@@ -9,8 +9,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.eclipse.jetty.util.ConcurrentHashSet;
-
 import com.google.gson.JsonObject;
 
 import spark.Spark;
@@ -31,17 +29,16 @@ public final class GCT {
 
 
   private GCT(GCTBuilder builder) {
-    // Not provided by builder:
-    this.pending = new ConcurrentHashSet<>();
-    this.full = new ConcurrentHashSet<>();
+    // ConcurrentHashMap.newKeySet() is the standard-library replacement for
+    // the removed Jetty-internal org.eclipse.jetty.util.ConcurrentHashSet.
+    this.pending         = ConcurrentHashMap.newKeySet();
+    this.full            = ConcurrentHashMap.newKeySet();
     this.userToUserGroup = new ConcurrentHashMap<>();
 
-    // provided by builder:
     this.groupSelector = builder.groupSelector;
     Spark.webSocket(builder.webSocketRoute, ReceivingWebsocket.class);
     ReceivingWebsocket.setGct(this);
 
-    // build group view websocket, if user wants it.
     if (builder.groupViewRoute != null) {
       Spark.webSocket(builder.groupViewRoute, GroupViewWebsocket.class);
       GroupViewWebsocket.setGCT(this);
@@ -50,44 +47,22 @@ public final class GCT {
   }
 
 
-  /**
-   * @return the maximum number of concurrent groups that this GCT supports.
-   */
   public int groupLimit() {
     return GAME_LIMIT;
   }
 
 
-  /**
-   * Get the Group that {@code u} is currently in, else {@code null} if no such
-   * group exists.
-   *
-   * @param u
-   *          the user to query
-   * @return the {@code Group} that {@code u} is in.
-   */
   public Group groupForUser(User u) {
     return userToUserGroup.get(u);
   }
 
 
-  /**
-   * Indicate if the given {@code uuid} represents a user that is presently in
-   * any game held by this GCT.
-   *
-   * @param uuid
-   * @return true if this user is presently in any group in this GCT.
-   */
   public boolean userIDIsValid(String uuid) {
     return pending.stream().anyMatch(grp -> grp.hasUser(uuid))
         || full.stream().anyMatch(grp -> grp.hasUser(uuid));
   }
 
 
-  /**
-   * @return a JsonObject representing the groups that are currently not full,
-   *         and in need of more users.
-   */
   public JsonObject openGroups() {
     refreshGroups();
     Collection<Group> list = new ArrayList<>();
@@ -102,19 +77,14 @@ public final class GCT {
   }
 
 
-  /**
-   * @return a JsonObject representing the groups that are currently full, and
-   *         not in need of more users.
-   */
   public JsonObject closedGroups() {
     refreshGroups();
     Collection<Group> list = new ArrayList<>();
-    full.stream().forEach(g -> list.add(new GroupView(g)));
+    full.forEach(g -> list.add(new GroupView(g)));
     Collection<Group> gr = Collections.unmodifiableCollection(list);
     JsonObject toRet = new JsonObject();
     toRet.add("closedGroups", Networking.GSON.toJsonTree(gr));
     return toRet;
-
   }
 
 
@@ -138,17 +108,6 @@ public final class GCT {
   }
 
 
-  /**
-   * Attempt to add a user, either to a currently non-full group, or to a new
-   * group if no such group is found by the GroupSelector. If {@code u} is
-   * already in a group, the add message is forwarded to that group, and the
-   * group can handle it accordingly. For example, if a {@code User} was
-   * previously marked as absent, the group can note that the user has returned.
-   *
-   * @param u
-   *          the {@code User} to add.
-   * @return true if the addition succeeded.
-   */
   public boolean add(User u) {
     Group bestFit =
         groupSelector.selectFor(u, Collections.unmodifiableCollection(pending));
@@ -165,16 +124,6 @@ public final class GCT {
   }
 
 
-  /**
-   * Attempt to remove {@code u} from the group in which it is contained. Will
-   * return false silently if {@code u} is not in any known group. Otherwise,
-   * will forward the remove request to the {@code Group} that contains
-   * {@code u}
-   *
-   * @param u
-   *          the {@code User} to remove
-   * @return true if the remove succeeded.
-   */
   public boolean remove(User u) {
     Group group = userToUserGroup.get(u);
     if (group == null) {
@@ -187,16 +136,6 @@ public final class GCT {
   }
 
 
-  /**
-   * Handle a websocket message from {@code u}. Will return false on error,
-   * particularly if {@code u} is not contained in any known Group in this GCT.
-   *
-   * @param u
-   *          the user that sent the message.
-   * @param j
-   *          the JsonObject message
-   * @return boolean indicating the suceess of the message being processed.
-   */
   public boolean message(User u, JsonObject j) {
     Group group = userToUserGroup.get(u);
     if (group == null) {
@@ -206,7 +145,6 @@ public final class GCT {
   }
 
 
-  // put a newly modified group into its proper set.
   private void filterGroup(Group g) {
     if (g.isFull()) {
       full.add(g);
@@ -214,7 +152,7 @@ public final class GCT {
     } else if (g.isEmpty()) {
       pending.remove(g);
       full.remove(g);
-    } else { // not full game, some players.
+    } else {
       pending.add(g);
       full.remove(g);
     }

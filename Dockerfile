@@ -1,14 +1,28 @@
-FROM alpine
+# ── Stage 1: build ────────────────────────────────────────────────────────────
+FROM maven:3.9-eclipse-temurin-17-alpine AS builder
 
-RUN mkdir /data
-WORKDIR /data
+WORKDIR /build
 
-RUN apk update
-RUN apk fetch openjdk8
-RUN apk add openjdk8 bash maven
-ENV JAVA_HOME=/usr/lib/jvm/java-1.8-openjdk
+# Cache dependency downloads before copying source
+COPY pom.xml .
+RUN mvn dependency:go-offline -q
 
-ADD . .
-RUN ./build.sh
-EXPOSE 4567/tcp
-CMD ./run
+COPY src ./src
+COPY config ./config
+
+RUN mvn package -DskipTests -q
+
+# ── Stage 2: runtime ──────────────────────────────────────────────────────────
+FROM eclipse-temurin:17-jre-alpine
+
+WORKDIR /app
+
+COPY --from=builder /build/target/catan-1.0-jar-with-dependencies.jar app.jar
+
+EXPOSE 4567
+
+# PORT env var is read by Main.getHerokuAssignedPort(); set it here so the
+# container always listens on 4567 regardless of host mapping.
+ENV PORT=4567
+
+CMD ["java", "-jar", "app.jar"]

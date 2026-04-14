@@ -14,7 +14,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 
-import org.eclipse.jetty.util.ConcurrentHashSet;
 import org.eclipse.jetty.websocket.api.Session;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketClose;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketConnect;
@@ -28,18 +27,17 @@ public class ReceivingWebsocket {
 
   private final ExecutorService   threadPool;
   private final Map<String, User> uuidToUser;
+  // ConcurrentHashMap.newKeySet() replaces the removed Jetty-internal
+  // org.eclipse.jetty.util.ConcurrentHashSet.
   private final Set<Session>      ignoreSession;
   private static GCT              gct;
 
 
   public ReceivingWebsocket() {
-    threadPool = Executors.newFixedThreadPool(8);
-    uuidToUser = new ConcurrentHashMap<>();
-    ignoreSession = new ConcurrentHashSet<>();
+    threadPool    = Executors.newFixedThreadPool(8);
+    uuidToUser    = new ConcurrentHashMap<>();
+    ignoreSession = ConcurrentHashMap.newKeySet();
   }
-
-
-  // Connecting and session management
 
 
   @OnWebSocketConnect
@@ -50,9 +48,8 @@ public class ReceivingWebsocket {
       return;
     }
     User u = userForSession(s);
-    if (u != null) { // existing user with old session, update it.
+    if (u != null) {
       if (!u.updateSession(s)) {
-        // tried to update an open session - TWO TAB MOFO
         ignoreSession.add(s);
         this.sendError(s, "DUPLICATE_TAB");
         return;
@@ -62,11 +59,10 @@ public class ReceivingWebsocket {
     }
     Future<?> f = threadPool.submit(new ConnectUserTask(u, gct));
     try {
-      f.get(); // blocks!
+      f.get();
     } catch (InterruptedException | ExecutionException e) {
       e.printStackTrace();
     }
-
   }
 
 
@@ -78,25 +74,18 @@ public class ReceivingWebsocket {
       System.out.println(
           "Cookie formatting error - should never happen in NewWebsocket");
     }
-    if (candidates.isEmpty()) { // no mention of UserID -> not expired, probably
-                                // new
+    if (candidates.isEmpty()) {
       return false;
     }
     String candidateID = candidates.get(0).getValue();
-    if (!uuidToUser.containsKey(candidateID)) { // if we've never seen it
-                                                // before, it is expired.
+    if (!uuidToUser.containsKey(candidateID)) {
       return true;
     }
-    // we know they have an ID, I've seen it before, we need to check with GCT
-    // if it is active.
     return !gct.userIDIsValid(candidateID);
-
-
   }
 
 
   private User createNewUser(Session s) {
-
     List<HttpCookie> cookies = s.getUpgradeRequest().getCookies();
     String id = DistinctRandom.getString();
     cookies.add(new HttpCookie(Networking.USER_IDENTIFIER, id));
@@ -138,18 +127,15 @@ public class ReceivingWebsocket {
     }
     User u = userForSession(s);
     if (u == null) {
-      System.out
-          .println("Disconnected user we've never seen before. Do nothing");
-      return; // do nothing with a disconnected user we've never seen.
+      System.out.println("Disconnected user we've never seen before. Do nothing");
+      return;
     }
 
     Future<?> f =
         threadPool.submit(new DisconnectUserTask(u, statusCode, reason, gct));
     try {
       f.get();
-
     } catch (InterruptedException | ExecutionException e) {
-      // TODO Auto-generated catch block
       e.printStackTrace();
     }
   }
@@ -158,14 +144,13 @@ public class ReceivingWebsocket {
   @OnWebSocketMessage
   public void onMessage(Session s, String msg) {
     if (ignoreSession.contains(s)) {
-      return; // ignore messages from duplicate sessions
+      return;
     }
     System.out.println(msg);
     User u = userForSession(s);
     if (u == null) {
-      System.out
-          .println("Message from user we've never seen before. Ignoring.");
-      return; // do nothing with an unfamiliar session
+      System.out.println("Message from user we've never seen before. Ignoring.");
+      return;
     }
     threadPool.submit(new MessageUserTask(u, msg, gct));
   }
@@ -173,8 +158,7 @@ public class ReceivingWebsocket {
 
   private User userForSession(Session s) {
     List<HttpCookie> list = s.getUpgradeRequest().getCookies().stream()
-        .filter(c -> c.getName()
-            .equals(Networking.USER_IDENTIFIER))
+        .filter(c -> c.getName().equals(Networking.USER_IDENTIFIER))
         .collect(Collectors.toList());
 
     if (list.size() > 1) {
@@ -196,6 +180,5 @@ public class ReceivingWebsocket {
   public static void setGct(GCT gctToSet) {
     gct = gctToSet;
   }
-
 
 }
