@@ -31,43 +31,40 @@ public class Main {
 
 
   private Main() {
-    // Serve static assets from the classpath (/src/main/resources/static →
-    // packed into the fat jar at /static/).  No filesystem path needed.
-    Spark.staticFileLocation("/static");
-
+    // 1. Pure config — must come before init() but does not trigger route mapping.
     Spark.port(getHerokuAssignedPort());
     Spark.threadPool(NUM_THREADS, MIN_THREADS, TIMEOUT);
+    Spark.staticFileLocation("/static");
 
-    // ── Reverse-proxy support ──────────────────────────────────────────────
-    // When running behind nginx / Caddy / Traefik the real client IP and
-    // scheme arrive in these standard headers.  Rewrite the request so that
-    // Spark's req.ip() / req.scheme() return the correct values downstream.
-    Spark.before((req, res) -> {
-      String forwardedFor = req.headers("X-Forwarded-For");
-      if (forwardedFor != null && !forwardedFor.isEmpty()) {
-        // X-Forwarded-For may be a comma-separated list; the first entry is
-        // the original client.
-        req.attribute("client-ip", forwardedFor.split(",")[0].trim());
-      }
-
-      String proto = req.headers("X-Forwarded-Proto");
-      if (proto != null && !proto.isEmpty()) {
-        // Force any absolute redirects to use the correct scheme.
-        req.attribute("spark.requestedScheme", proto.trim());
-      }
-    });
-
+    // 2. WebSocket registration — MUST happen before any Spark.before() or
+    //    Spark.get() call, because those trigger route-mapping which permanently
+    //    closes the window for WebSocket handler registration.
+    //    GCT registers the /action and /groups WebSocket endpoints internally.
     gct = new GCTBuilder("/action")
         .withGroupSelector(new CatanGroupSelector())
         .withGroupViewRoute("/groups")
         .build();
 
-    // Load Freemarker templates from the classpath so the fat jar is
-    // self-contained — no filesystem template directory required at runtime.
+    // 3. Freemarker — pure Java config, order doesn't matter.
     Configuration config = new Configuration();
     config.setClassForTemplateLoading(Main.class, "/spark/template/freemarker");
     FreeMarkerEngine freeMarker = new FreeMarkerEngine(config);
 
+    // 4. Reverse-proxy header filter — safe to add after WebSocket registration.
+    //    Reads X-Forwarded-For / X-Forwarded-Proto set by Caddy/nginx/Traefik
+    //    and attaches them as request attributes for downstream use.
+    Spark.before((req, res) -> {
+      String forwardedFor = req.headers("X-Forwarded-For");
+      if (forwardedFor != null && !forwardedFor.isEmpty()) {
+        req.attribute("client-ip", forwardedFor.split(",")[0].trim());
+      }
+      String proto = req.headers("X-Forwarded-Proto");
+      if (proto != null && !proto.isEmpty()) {
+        req.attribute("spark.requestedScheme", proto.trim());
+      }
+    });
+
+    // 5. Routes.
     Spark.get("/board", new BoardHandler(), freeMarker);
     Spark.get("/home",  new HomeHandler(),  freeMarker);
     Spark.get("/stats", new StatsHandler(), freeMarker);
@@ -84,7 +81,7 @@ public class Main {
   private void run() {}
 
 
-  /** Reads PORT env var so the image works with any host port mapping. */
+  /** Reads PORT env var; falls back to 4567 for local runs. */
   private static int getHerokuAssignedPort() {
     String port = System.getenv("PORT");
     return port != null ? Integer.parseInt(port) : 4567;
