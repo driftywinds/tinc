@@ -9,11 +9,15 @@ import edu.brown.cs.networking.GCT;
 import edu.brown.cs.networking.GCT.GCTBuilder;
 import edu.brown.cs.networking.Networking;
 import freemarker.template.Configuration;
+import org.eclipse.jetty.http.HttpCompliance;
+import org.eclipse.jetty.server.HttpConfiguration;
 import spark.ModelAndView;
 import spark.Request;
 import spark.Response;
 import spark.Spark;
 import spark.TemplateViewRoute;
+import spark.embeddedserver.EmbeddedServers;
+import spark.embeddedserver.jetty.EmbeddedJettyFactory;
 import spark.template.freemarker.FreeMarkerEngine;
 
 public class Main {
@@ -31,6 +35,17 @@ public class Main {
 
 
   private Main() {
+    // ── Jetty HTTP compliance ──────────────────────────────────────────────
+    // JVM system properties like -Dorg.eclipse.jetty.http.HttpCompliance=LEGACY
+    // are NOT read by Jetty 9.4 — HttpCompliance is an enum, not a property.
+    // The only working way is to register a custom EmbeddedJettyFactory with
+    // an HttpConfiguration before any other Spark call is made.
+    HttpConfiguration httpConfig = new HttpConfiguration();
+    httpConfig.setHttpCompliance(HttpCompliance.LEGACY);
+    httpConfig.setSendServerVersion(false);
+    EmbeddedServers.add(EmbeddedServers.Identifiers.JETTY,
+        new EmbeddedJettyFactory().withHttpConfiguration(httpConfig));
+
     // 1. Pure config — must come before init() but does not trigger route mapping.
     Spark.port(getHerokuAssignedPort());
     Spark.threadPool(NUM_THREADS, MIN_THREADS, TIMEOUT);
@@ -39,7 +54,6 @@ public class Main {
     // 2. WebSocket registration — MUST happen before any Spark.before() or
     //    Spark.get() call, because those trigger route-mapping which permanently
     //    closes the window for WebSocket handler registration.
-    //    GCT registers the /action and /groups WebSocket endpoints internally.
     gct = new GCTBuilder("/action")
         .withGroupSelector(new CatanGroupSelector())
         .withGroupViewRoute("/groups")
@@ -51,8 +65,6 @@ public class Main {
     FreeMarkerEngine freeMarker = new FreeMarkerEngine(config);
 
     // 4. Reverse-proxy header filter — safe to add after WebSocket registration.
-    //    Reads X-Forwarded-For / X-Forwarded-Proto set by Caddy/nginx/Traefik
-    //    and attaches them as request attributes for downstream use.
     Spark.before((req, res) -> {
       String forwardedFor = req.headers("X-Forwarded-For");
       if (forwardedFor != null && !forwardedFor.isEmpty()) {
